@@ -1,0 +1,112 @@
+import {db,doc,onSnapshot,collection,$,esc,applyChrome,initChromeInteractions,productImage,productBadges,imageAreaStyle} from "./common.js";
+
+let products=[],articles=[],categories=[];
+
+initChromeInteractions();
+renderSkeletons();
+
+function renderCategories(){
+  const visible=categories.filter(c=>c.active!==false).sort((a,b)=>(a.order??999)-(b.order??999));
+  $("categories").hidden=visible.length===0;
+  $("categoriesGrid").innerHTML=visible.map(c=>`<button class="category" data-category="${esc(c.name||c.label)}"><span class="category-icon">${esc(c.icon||"✦")}</span><strong>${esc(c.name||c.label)}</strong></button>`).join("");
+  document.querySelectorAll(".category").forEach(b=>b.onclick=()=>{
+    location.href=`products.html?category=${encodeURIComponent(b.dataset.category)}`;
+  });
+}
+
+let siteSettings={};
+const sectionOf=p=>p.homeSection||(p.showOnHome===true?"top":"");
+
+function productCardHtml(p){
+  const size=document.body.dataset.productSize||"medium";
+  const stars="★".repeat(Math.max(0,Math.min(5,Math.round(Number(p.rating)||0))));
+  return `<article class="product-card size-${esc(p.cardSize||size)} imgsize-${esc(p.imageSize||size)}"><div class="product-image fit-${esc(p.imageFit||"contain")}" style="${imageAreaStyle(p)}">${productBadges(p)}${productImage(p)}</div><div class="product-body"><div class="rating">${stars||"☆"} ${esc(p.rating||"")}${p.reviewCount?` <span>(${esc(p.reviewCount)})</span>`:""}</div><h3>${esc(p.name)}</h3>${p.price?`<div class="price">${esc(p.price)} ${p.previousPrice?`<del>${esc(p.previousPrice)}</del>`:""}</div>`:""}<div class="pc-actions"><a class="button primary" href="products.html?id=${encodeURIComponent(p.id)}">View Details</a></div></div></article>`;
+}
+
+// Homepage product sections, both chosen in the Admin Panel (Homepage Products tab):
+//  - "top"   -> first section (kitchen appliances / top picks)
+//  - "decor" -> Home Decor section, shown below the first few articles
+function homeList(section){
+  return products
+    .filter(p=>p.active!==false&&p.published!==false&&sectionOf(p)===section)
+    .sort((a,b)=>(a.homeOrder??999)-(b.homeOrder??999))
+    .slice(0,12);
+}
+function renderHomeProducts(){
+  const top=homeList("top");
+  $("productsGrid").innerHTML=top.map(productCardHtml).join("");
+  $("emptyProducts").hidden=top.length>0;
+  const decor=homeList("decor");
+  $("decorGrid").innerHTML=decor.map(productCardHtml).join("");
+  $("decorSection").hidden=decor.length===0;
+}
+
+function guideCardHtml(a){
+  return `<article class="guide-card"><a class="guide-image" href="article.html?id=${encodeURIComponent(a.id)}">${a.image?`<img src="${esc(a.image)}" alt="${esc(a.title)}" loading="lazy">`:`<span>✦</span>`}</a><div class="guide-body"><p class="eyebrow">${esc(a.category||"BUYING GUIDE")}</p><h3>${esc(a.title)}</h3><p>${esc(a.excerpt||"")}</p><a class="read-button" href="article.html?id=${encodeURIComponent(a.id)}">Read Article →</a></div></article>`;
+}
+// First N articles go above the Home Decor section (N is set in Admin > Home > Homepage Layout, default 4); the rest go below it.
+function renderArticles(){
+  const visible=articles.filter(a=>a.active!==false&&a.published!==false).sort((a,b)=>(a.order??999)-(b.order??999));
+  const n=Number.isFinite(Number(siteSettings.homeArticlesBeforeDecor))?Number(siteSettings.homeArticlesBeforeDecor):4;
+  const first=visible.slice(0,n),rest=visible.slice(n);
+  $("guidesGrid").innerHTML=first.map(guideCardHtml).join("");
+  $("emptyArticles").hidden=visible.length>0;
+  $("moreGuidesGrid").innerHTML=rest.map(guideCardHtml).join("");
+  $("moreGuides").hidden=rest.length===0;
+}
+
+// Shows lightweight pulsing placeholder cards the instant the page loads,
+// so visitors see something immediately instead of blank sections while
+// Firestore data streams in. Real content overwrites these automatically
+// as soon as each onSnapshot listener below fires.
+function renderSkeletons(){
+  if(!document.getElementById("skeletonStyles")){
+    const style=document.createElement("style");
+    style.id="skeletonStyles";
+    style.textContent=`
+      .skel{background:linear-gradient(90deg,#eee 25%,#f5f5f5 37%,#eee 63%);background-size:400% 100%;animation:skel-pulse 1.4s ease infinite;border-radius:10px}
+      @keyframes skel-pulse{0%{background-position:100% 50%}100%{background-position:0 50%}}
+      .skel-category{height:90px;width:120px;flex:none;display:inline-block;margin-right:12px}
+      .skel-card{height:280px}
+    `;
+    document.head.appendChild(style);
+  }
+  const catGrid=$("categoriesGrid");
+  if(catGrid&&!catGrid.innerHTML.trim())catGrid.innerHTML=Array(6).fill('<div class="skel skel-category"></div>').join("");
+  const prodGrid=$("productsGrid");
+  if(prodGrid&&!prodGrid.innerHTML.trim())prodGrid.innerHTML=Array(6).fill('<div class="skel skel-card"></div>').join("");
+  const guideGrid=$("guidesGrid");
+  if(guideGrid&&!guideGrid.innerHTML.trim())guideGrid.innerHTML=Array(3).fill('<div class="skel skel-card"></div>').join("");
+}
+
+function initCategoryCarousel(){
+  const track=$("categoriesGrid");
+  if(!track)return;
+  let paused=false,resumeTimer;
+  const pause=()=>{paused=true;clearTimeout(resumeTimer);resumeTimer=setTimeout(()=>{paused=false},2600)};
+  ["pointerdown","touchstart","wheel"].forEach(ev=>track.addEventListener(ev,pause,{passive:true}));
+  function step(){
+    if(!paused&&track.scrollWidth>track.clientWidth+2){
+      track.scrollLeft+=0.6;
+      if(track.scrollLeft+track.clientWidth>=track.scrollWidth-1)track.scrollLeft=0;
+    }
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+initCategoryCarousel();
+
+try{
+  onSnapshot(doc(db,"siteContent","main"),s=>{
+    siteSettings=s.exists()?s.data():{};
+    applyChrome(siteSettings);
+    const set=(id,v)=>{if($(id)&&v)$(id).textContent=v};
+    set("homeTopEyebrow",siteSettings.homeTopEyebrow);set("homeTopTitle",siteSettings.homeTopTitle);
+    set("homeDecorEyebrow",siteSettings.homeDecorEyebrow);set("homeDecorTitle",siteSettings.homeDecorTitle);
+    set("homeMoreTitle",siteSettings.homeMoreTitle);
+    renderArticles();
+  },e=>console.error("siteContent:",e));
+  onSnapshot(collection(db,"categories"),s=>{categories=s.docs.map(x=>({id:x.id,...x.data()}));renderCategories()},e=>console.error("categories:",e));
+  onSnapshot(collection(db,"products"),s=>{products=s.docs.map(x=>({id:x.id,...x.data()}));renderHomeProducts()},e=>{console.error("products:",e);products=[];renderHomeProducts()});
+  onSnapshot(collection(db,"articles"),s=>{articles=s.docs.map(x=>({id:x.id,...x.data()}));renderArticles()},e=>{console.error("articles:",e);articles=[];renderArticles()});
+}catch(e){console.error(e)}
